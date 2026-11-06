@@ -18,8 +18,9 @@ WORKDIR /src/event-exporter-rs
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 ENV RUSTFLAGS="-C target-feature=+crt-static"
-RUN cargo build --release --locked --bin event-exporter && \
-    cp target/release/event-exporter /event-exporter
+RUN HOST_TRIPLE="$(rustc -vV | sed -n 's/host: //p')" && \
+    cargo build --release --locked --target "${HOST_TRIPLE}" --bin event-exporter && \
+    cp "target/${HOST_TRIPLE}/release/event-exporter" /event-exporter
 
 FROM --platform=$TARGETPLATFORM gcr.io/distroless/static:latest
 COPY --from=builder /event-exporter /event-exporter

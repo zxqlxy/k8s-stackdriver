@@ -8,7 +8,9 @@ use event_exporter_rs::cli::ExporterConfig;
 use event_exporter_rs::enricher::{
     ClusterCoordinates, enrich_event_object, format_unix_nanos_rfc3339, parse_rfc3339_unix_nanos,
 };
-use event_exporter_rs::k8s_stream::{InitialSyncLatch, KubeClientConfig, run_pod_reflector_loop};
+use event_exporter_rs::k8s_stream::{
+    InitialSyncLatch, KubeClientConfig, paginated_pod_relist, run_pod_reflector_loop,
+};
 use event_exporter_rs::metrics::MetricsRegistry;
 use event_exporter_rs::pod_cache::{
     CompactOwner, ControllerKind, OwnerRefExtract, PodKey, PodMetadataExtract, PodOwnerTable,
@@ -557,6 +559,49 @@ fn test_watchlist_premature_eof_before_bookmark_regression() {
     stop_flag.store(1, Ordering::Release);
     let _ = reflector.join();
     let _ = srv_handle.join();
+
+    // Verify Go nil-slice `"items": null` List responses on empty/idle clusters parse cleanly.
+    let null_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let null_addr = null_listener.local_addr().unwrap();
+    let null_srv = std::thread::spawn(move || {
+        let (mut stream, _) = null_listener.accept().unwrap();
+        let mut reader = BufReader::new(&stream);
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                break;
+            }
+        }
+        let body = r#"{"kind":"PartialObjectMetadataList","metadata":{"resourceVersion":"9001"},"items":null}"#;
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+    });
+    let null_stop = AtomicU8::new(0);
+    let mut null_shard = ShardSpec::default();
+    let null_kube = KubeClientConfig {
+        api_base: format!("http://{null_addr}"),
+        ca_cert_path: None,
+        token_source: Arc::new(KubeTokenSource::new(None)),
+        shard: null_shard,
+        enable_watch_list: false,
+        list_page_size: 100,
+        event_label_selector: None,
+    };
+    let rv = paginated_pod_relist(
+        &null_kube,
+        &mut null_shard,
+        &pod_table,
+        &metrics,
+        &null_stop,
+    )
+    .expect("Kubernetes List with \"items\": null must deserialize cleanly");
+    assert_eq!(rv, "9001");
+    assert_eq!(pod_table.len(), 0);
+    let _ = null_srv.join();
 }
 
 #[test]

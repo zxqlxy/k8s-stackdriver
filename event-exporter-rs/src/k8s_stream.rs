@@ -107,7 +107,7 @@ struct RawItemsList<'a> {
     #[serde(default)]
     metadata: ListMetadata,
     #[serde(default, borrow)]
-    items: Vec<&'a RawValue>,
+    items: Option<Vec<&'a RawValue>>,
 }
 
 /// Shared Kubernetes API connection parameters.
@@ -561,7 +561,7 @@ pub fn paginated_pod_relist(
             list_rv = page.metadata.resource_version;
         }
 
-        for raw_item in page.items {
+        for raw_item in page.items.unwrap_or_default() {
             if let Ok(pod_meta) = parse_partial_pod_object(raw_item.get().as_bytes())
                 && active_shard.owns_pod(&pod_meta.namespace, &pod_meta.name, server_filtered)
             {
@@ -920,7 +920,7 @@ fn recover_events_after_gone(
             list_rv = page.metadata.resource_version;
         }
 
-        for raw_item in page.items {
+        for raw_item in page.items.unwrap_or_default() {
             let Ok(event_map) =
                 serde_json::from_slice::<Map<String, Value>>(raw_item.get().as_bytes())
             else {
